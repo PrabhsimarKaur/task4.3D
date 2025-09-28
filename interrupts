@@ -1,0 +1,158 @@
+#include <RTCZero.h>
+#include <DHT.h>
+#include <Wire.h>
+#include <BH1750.h>
+
+// Pin Definitions
+const int buttonPin   = 2;  // Button → GREEN LED
+const int sensor1Pin  = 3;  // Sensor → No LED  
+const int dhtPin      = 5;  // DHT22 data
+const int ledButton   = 6;  // GREEN LED for button
+const int ledLight    = 7;  // RED LED for light sensor 
+const int ledDHT      = 8;  // GREEN LED for DHT22
+
+// DHT Setup
+#define DHTTYPE DHT22
+DHT dht(dhtPin, DHTTYPE);
+
+// Light Sensor Setup
+BH1750 lightMeter;
+
+// Globals
+volatile bool buttonFlag = false;
+volatile bool sensor1Flag = false;
+volatile bool timerFlag = false;
+bool lightLedActive = false;
+bool dhtLedActive = false;
+unsigned long lightLedTime = 0;
+unsigned long dhtLedTime = 0;
+
+// RTC Setup
+RTCZero rtc;
+
+void alarmMatch() {
+  timerFlag = true;
+}
+
+void handleButton() {
+  buttonFlag = true;
+}
+
+void handleSensor1() {
+  sensor1Flag = true;
+}
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial);
+  delay(2000);
+  
+  // Pin modes
+  pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(sensor1Pin, INPUT_PULLUP);
+  pinMode(dhtPin, INPUT_PULLUP);
+  pinMode(ledButton, OUTPUT);
+  pinMode(ledLight, OUTPUT);
+  pinMode(ledDHT, OUTPUT);
+
+  // Initialize
+  digitalWrite(dhtPin, HIGH);
+  dht.begin();
+  Wire.begin();
+  lightMeter.begin();
+  digitalWrite(ledButton, LOW);
+  digitalWrite(ledLight, LOW);
+  digitalWrite(ledDHT, LOW);
+
+  // Attach interrupts
+  attachInterrupt(digitalPinToInterrupt(buttonPin), handleButton, FALLING);
+  attachInterrupt(digitalPinToInterrupt(sensor1Pin), handleSensor1, FALLING);
+
+  // Setup RTC timer
+  rtc.begin();
+  rtc.setTime(0, 0, 0);
+  rtc.setAlarmSeconds(2);
+  rtc.enableAlarm(rtc.MATCH_SS);
+  rtc.attachInterrupt(alarmMatch);
+
+  Serial.println("✅ SYSTEM READY!");
+  Serial.println("GREEN LED (D6): Button toggle");
+  Serial.println("RED LED (D7): Light level detection"); 
+  Serial.println("GREEN LED (D8): DHT22 reading indicator");
+  Serial.println("=====================================");
+}
+
+void loop() {
+  // Button interrupt - GREEN LED
+  if (buttonFlag) {
+    buttonFlag = false;
+    digitalWrite(ledButton, !digitalRead(ledButton));
+    Serial.println("Button pressed - GREEN LED toggled");
+    delay(50);
+  }
+
+  // Sensor interrupt - No LED, just Serial message
+  if (sensor1Flag) {
+    sensor1Flag = false;
+    Serial.println("Sensor triggered - No LED, only Serial message");
+    delay(50);
+  }
+
+  // Light LED control (blink for 1000ms only)
+  if (lightLedActive && millis() - lightLedTime > 1000) {
+    lightLedActive = false;
+    digitalWrite(ledLight, LOW);
+  }
+
+  // DHT22 LED control (blink for 1000ms only)
+  if (dhtLedActive && millis() - dhtLedTime > 1000) {
+    dhtLedActive = false;
+    digitalWrite(ledDHT, LOW);
+  }
+
+  // Timer interrupt - Sensor readings
+  if (timerFlag) {
+    timerFlag = false;
+    
+    Serial.println("--- Timer Interrupt (2s) ---");
+
+    // LIGHT SENSOR - Controls RED LED (D7)
+    float lux = lightMeter.readLightLevel();
+    Serial.print("Light level: ");
+    Serial.print(lux);
+    Serial.println(" lx");
+
+    if (lux >= 20) {
+      digitalWrite(ledLight, HIGH); // Turn ON RED LED
+      lightLedActive = true;
+      lightLedTime = millis();
+      Serial.println("✅ Enough light - RED LED blinking");
+    } else {
+      Serial.println("❌ Too dark - RED LED stays OFF");
+    }
+
+    // DHT22 SENSOR - Controls GREEN LED (D8)
+    digitalWrite(ledDHT, HIGH); // Turn ON GREEN LED
+    dhtLedActive = true;
+    dhtLedTime = millis();
+    
+    float temperature = dht.readTemperature();
+    float humidity = dht.readHumidity();
+    
+    if (isnan(temperature) || isnan(humidity)) {
+      Serial.println("DHT22: Read error!");
+    } else {
+      Serial.print("DHT22: ");
+      Serial.print(temperature);
+      Serial.print("°C, ");
+      Serial.print(humidity);
+      Serial.println("% humidity");
+      Serial.println("✅ DHT22 reading - GREEN LED blinking");
+    }
+    
+    Serial.println("---------------------------");
+    rtc.setAlarmSeconds((rtc.getSeconds() + 2) % 60);
+  }
+
+  delay(10);
+}
